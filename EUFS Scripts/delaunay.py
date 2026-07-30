@@ -31,6 +31,29 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 
 # ---------------------------------------------------------------------------
+# Tuning
+# ---------------------------------------------------------------------------
+# Skidpad geometry (FS rules): inner cone ring r=7.625, outer r=10.625, so the
+# centreline radius is 9.125 and the two circle centres sit +-9.125 in y from
+# the gate.
+CIRCLE_RADIUS = 9.125
+
+# Max allowed deviation (m) of a midpoint from its circle's centreline radius.
+# Without this the only geometric guards were the x-knife and the y-split, and
+# neither can reject a midpoint that sits inside the track but off the circle:
+# the centreline only reaches gate_x + 9.125 = 23.4 while the knife sits at
+# gate_x + 11.0 = 25.3, so that 1.9 m gap admitted guaranteed-off-circle points,
+# as did Small Orange <-> Small Orange pairs in the crossover.
+#
+# Those points then break the radial sort in _get_spline_and_arcs: sorting by
+# angle around the centre is only a valid PATH ordering when every point shares
+# roughly one radius. Off-circle points at nearly the same angle get ordered
+# arbitrarily against on-circle ones, so the spline whipsaws in and out
+# radially -- measured 10.0 -> 13.1 -> 8.8 -> 10.4 -> 11.2 across five
+# consecutive knots. That is what the spikes were.
+CIRCLE_BAND = 1.0
+
+# ---------------------------------------------------------------------------
 # Math Helpers
 # ---------------------------------------------------------------------------
 def circumcircle_radius(a, b, c):
@@ -180,11 +203,25 @@ class PassiveDelaunayMapper(Node):
                                 
                             y_diff = mid_y - self.gate_center_y
                             if y_diff > 0.5:
-                                if not any(math.hypot(mid_x-ex, mid_y-ey) < 0.8 for ex, ey in self.right_circle_wpts):
-                                    self.right_circle_wpts.append([mid_x, mid_y])
+                                circle_cy = self.gate_center_y + CIRCLE_RADIUS
+                                target    = self.right_circle_wpts
                             elif y_diff < -0.5:
-                                if not any(math.hypot(mid_x-ex, mid_y-ey) < 0.8 for ex, ey in self.left_circle_wpts):
-                                    self.left_circle_wpts.append([mid_x, mid_y])
+                                circle_cy = self.gate_center_y - CIRCLE_RADIUS
+                                target    = self.left_circle_wpts
+                            else:
+                                continue
+
+                            # ─── RADIAL BAND ───
+                            # Keep only midpoints actually on this circle's
+                            # centreline. See CIRCLE_BAND: without this, points
+                            # scattered across radii 8.8-13.1 reached the spline
+                            # and the angle sort turned them into radial spikes.
+                            if abs(math.hypot(mid_x - self.gate_center_x,
+                                              mid_y - circle_cy) - CIRCLE_RADIUS) > CIRCLE_BAND:
+                                continue
+
+                            if not any(math.hypot(mid_x-ex, mid_y-ey) < 0.8 for ex, ey in target):
+                                target.append([mid_x, mid_y])
 
             self._visual_edges = [((pts[e[0]][0], pts[e[0]][1]), (pts[e[1]][0], pts[e[1]][1])) for e in valid_edges]
                                    
@@ -393,3 +430,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
